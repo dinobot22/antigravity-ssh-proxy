@@ -16,7 +16,7 @@ This is an extension for **Antigravity** ([Open VSX Link](https://open-vsx.org/e
 
 > ✨ **No Root Permission Required** - All operations run in user space for security and convenience!
 
-> **Note:** **Current version** only supports **Linux remote servers (x86_64)**. ARM based servers are **NOT** yet supported.
+> **Note:** Supports **Linux remote servers (x86_64 / amd64)**. ARM64 architecture is **experimentally supported** (requires v0.0.15+).
 
 > This project is a fork of [wang-muhan/antigravity-interface](https://github.com/wang-muhan/antigravity-interface). Thanks to the original author for the excellent work!
 
@@ -135,7 +135,7 @@ Before uninstalling, run the **Antigravity SSH Proxy: Rollback Remote Environmen
 ## Requirements
 
 - SSH access to the remote server.
-- Linux remote server (Currently x86_64 only).
+- Linux remote server (supports x86_64/amd64, ARM64 is experimentally supported, requires v0.0.15+).
 - A local proxy running on your computer (e.g., Clash, V2Ray).
 
 ## Acknowledgements

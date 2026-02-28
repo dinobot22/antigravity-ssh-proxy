@@ -4,7 +4,7 @@
   "displayName": "Antigravity SSH Proxy (ATP)",
   "description": "Easily fix connectivity issues for the Antigravity remote server. This extension ensures your remote coding tools can bypass server firewalls by securely routing Antigravity's traffic through your local computer or a designated server gateway.",
   "icon": "ATP.jpg",
-  "version": "0.0.14",
+  "version": "0.0.15",
   "repository": {
     "type": "git",
     "url": "https://github.com/dinobot22/antigravity-ssh-proxy"

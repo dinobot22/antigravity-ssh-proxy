@@ -15,7 +15,7 @@
 
 > ✨ **无需 root 权限** - 所有操作均在用户空间完成，安全便捷！
 
-> **注意:** **当前版本**仅支持 **Linux 远程服务器 (x86_64)**。ARM 架构暂不支持。
+> **注意:** 支持 **Linux 远程服务器 (x86_64 / amd64)**。ARM64 架构为**实验性支持**（需 v0.0.15+）。
 
 > 本项目基于 [wang-muhan/antigravity-interface](https://github.com/wang-muhan/antigravity-interface) 进行二次开发，感谢原作者的出色工作！
 
@@ -141,6 +141,7 @@ Match all
 >    cat /proc/sys/kernel/yama/ptrace_scope  # Ptrace 权限信息
 >    ls -la /.dockerenv                # 是否在 Docker 中
 >    lscpu | grep -i aes               # 查看cpu情况
+>    ps -aux | grep language_server
 > ```
 
 ## 扩展设置
@@ -162,7 +163,7 @@ Match all
 ## 环境要求
 
 - 远程服务器的 SSH 访问权限。
-- Linux 远程服务器（当前仅支持 x86_64 架构）。
+- Linux 远程服务器（支持 x86_64/amd64，ARM64 为实验性支持，需 v0.0.15+）。
 - 本地运行的代理软件（如 Clash、V2Ray）。
 
 ## 致谢

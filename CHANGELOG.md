@@ -2,6 +2,18 @@
 
 All notable changes to the "Antigravity SSH Proxy" extension will be documented in this file.
 
+## [0.0.15] - 2026-02-27
+
+### Added
+
+- **ARM64 Support with FakeDNS**: Added `mgraftcp-fakedns-linux-arm64` and `libdnsredir-linux-arm64.so` binaries for ARM64 Linux servers.
+  - ARM64 servers now have full FakeDNS support for DNS pollution prevention
+  - Binaries are compiled with glibc 2.31 for maximum compatibility (Ubuntu 20.04+)
+
+### Fixed
+
+- **ARM64 Binary Replacement**: Replaced old non-functional `mgraftcp-linux-arm64` with working `mgraftcp-fakedns-linux-arm64` that includes FakeDNS support.
+
 ## [0.0.14] - 2026-02-26
 
 ### Fixed
