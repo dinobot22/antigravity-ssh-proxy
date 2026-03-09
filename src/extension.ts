@@ -174,7 +174,7 @@ function getAntigravityConfigPath(): string {
 /**
  * Update the SSH config files using the Include approach
  */
-async function updateSSHConfigFile(remotePort: number, localPort: number, enable: boolean): Promise<void> {
+async function updateSSHConfigFile(remotePort: number, localPort: number, enable: boolean, localHost: string = '127.0.0.1'): Promise<void> {
 	const mainConfigPath = getSSHConfigPath();
 	const antiConfigPath = getAntigravityConfigPath();
 
@@ -188,7 +188,7 @@ async function updateSSHConfigFile(remotePort: number, localPort: number, enable
 				'# Antigravity SSH Proxy Configuration',
 				`# Generated at: ${new Date().toISOString()}`,
 				'Match all',
-				`    RemoteForward ${remotePort} 127.0.0.1:${localPort}`,
+				`    RemoteForward ${remotePort} ${localHost}:${localPort}`,
 				'    ExitOnForwardFailure no',
 				'    VisualHostKey no',
 				'',
@@ -243,7 +243,7 @@ async function getSSHConfigStatus(): Promise<{ enabled: boolean; port?: number }
 		const mainContent = await fs.readFile(getSSHConfigPath(), 'utf-8');
 		if (mainContent.includes(INCLUDE_LINE)) {
 			const antiContent = await fs.readFile(getAntigravityConfigPath(), 'utf-8');
-			const match = antiContent.match(/RemoteForward\s+(\d+)\s+(?:localhost|127\.0\.0\.1):/);
+			const match = antiContent.match(/RemoteForward\s+(\d+)\s+[^\s:]+:\d+/);
 			if (match) {
 				return { enabled: true, port: parseInt(match[1]) };
 			}
@@ -322,27 +322,29 @@ async function activateLocal(context: vscode.ExtensionContext) {
 	// 设置配置变更回调（用于面板中修改配置时触发）
 	statusManager.setConfigChangeCallback(async () => {
 		const cfg = vscode.workspace.getConfiguration('antigravity-ssh-proxy');
+		const lh = cfg.get<string>('localProxyHost', '127.0.0.1');
 		const lp = cfg.get<number>('localProxyPort', 7890);
 		const rp = cfg.get<number>('remoteProxyPort', 7890);
 		const enabled = cfg.get<boolean>('enableLocalForwarding', true);
-		await updateSSHConfigFile(rp, lp, enabled);
+		await updateSSHConfigFile(rp, lp, enabled, lh);
 		statusManager.updateSSHConfigStatus(enabled, rp);
 	});
 
 	const config = vscode.workspace.getConfiguration('antigravity-ssh-proxy');
 	const enable = config.get<boolean>('enableLocalForwarding', true);
+	const localHost = config.get<string>('localProxyHost', '127.0.0.1');
 	const localPort = config.get<number>('localProxyPort', 7890);
 	const remotePort = config.get<number>('remoteProxyPort', 7890);
 
-	log(`Config: enable=${enable}, localPort=${localPort}, remotePort=${remotePort}`);
+	log(`Config: enable=${enable}, localHost=${localHost}, localPort=${localPort}, remotePort=${remotePort}`);
 
 	// Auto-setup on activation
 	if (enable) {
-		await updateSSHConfigFile(remotePort, localPort, true);
+		await updateSSHConfigFile(remotePort, localPort, true, localHost);
 		statusManager.updateSSHConfigStatus(true, remotePort);
-		if (!await checkPortAvailable('127.0.0.1', localPort)) {
+		if (!await checkPortAvailable(localHost, localPort)) {
 			vscode.window.showWarningMessage(
-				`Local proxy at 127.0.0.1:${localPort} is not running. ` +
+				`Local proxy at ${localHost}:${localPort} is not running. ` +
 				`Also check if port ${remotePort} is occupied on the remote server before reconnecting.`
 			);
 		}
@@ -360,10 +362,11 @@ async function activateLocal(context: vscode.ExtensionContext) {
 		vscode.workspace.onDidChangeConfiguration(async (e: vscode.ConfigurationChangeEvent) => {
 			if (e.affectsConfiguration('antigravity-ssh-proxy')) {
 				const cfg = vscode.workspace.getConfiguration('antigravity-ssh-proxy');
+				const lh = cfg.get<string>('localProxyHost', '127.0.0.1');
 				const lp = cfg.get<number>('localProxyPort', 7890);
 				const rp = cfg.get<number>('remoteProxyPort', 7890);
 				const enabled = cfg.get<boolean>('enableLocalForwarding', true);
-				await updateSSHConfigFile(rp, lp, enabled);
+				await updateSSHConfigFile(rp, lp, enabled, lh);
 				statusManager.updateSSHConfigStatus(enabled, rp);
 				await statusManager.refreshStatus();
 			}
@@ -374,9 +377,10 @@ async function activateLocal(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		vscode.commands.registerCommand('antigravity-ssh-proxy.enableForwarding', async () => {
 			const cfg = vscode.workspace.getConfiguration('antigravity-ssh-proxy');
+			const lh = cfg.get<string>('localProxyHost', '127.0.0.1');
 			const lp = cfg.get<number>('localProxyPort', 7890);
 			const rp = cfg.get<number>('remoteProxyPort', 7890);
-			await updateSSHConfigFile(rp, lp, true);
+			await updateSSHConfigFile(rp, lp, true, lh);
 			statusManager.updateSSHConfigStatus(true, rp);
 			await statusManager.refreshStatus();
 			vscode.window.showInformationMessage('SSH port forwarding enabled');
