@@ -63,7 +63,7 @@ function getSSHConfigPath(): string {
 /**
  * Check local proxy service
  */
-async function checkLocalProxy(localProxyPort: number): Promise<DiagnosticCheck> {
+async function checkLocalProxy(localProxyPort: number, localProxyHost: string = '127.0.0.1'): Promise<DiagnosticCheck> {
     const check: DiagnosticCheck = {
         id: 'local-proxy',
         name: 'Local Proxy Service',
@@ -71,13 +71,13 @@ async function checkLocalProxy(localProxyPort: number): Promise<DiagnosticCheck>
     };
 
     try {
-        const reachable = await checkPort('127.0.0.1', localProxyPort);
+        const reachable = await checkPort(localProxyHost, localProxyPort);
         if (reachable) {
             check.status = 'success';
-            check.message = `Local proxy is running on port ${localProxyPort}`;
+            check.message = `Local proxy is running on ${localProxyHost}:${localProxyPort}`;
         } else {
             check.status = 'error';
-            check.message = `Cannot connect to local proxy on port ${localProxyPort}`;
+            check.message = `Cannot connect to local proxy on ${localProxyHost}:${localProxyPort}`;
             check.suggestion = 'Please ensure your local proxy (e.g., Clash, V2Ray) is running and listening on the configured port.';
         }
     } catch (error) {
@@ -502,6 +502,7 @@ async function checkExternalConnectivity(remoteProxyHost: string, remoteProxyPor
 export async function runDiagnostics(onProgress?: ProgressCallback, extensionPath?: string): Promise<DiagnosticReport> {
     const config = vscode.workspace.getConfiguration('antigravity-ssh-proxy');
     const localProxyPort = config.get<number>('localProxyPort', 7890);
+    const localProxyHost = config.get<string>('localProxyHost', '127.0.0.1');
     const remoteProxyPort = config.get<number>('remoteProxyPort', 7890);
     const remoteProxyHost = config.get<string>('remoteProxyHost', '127.0.0.1');
     const proxyType = config.get<string>('proxyType', 'http');
@@ -528,7 +529,7 @@ export async function runDiagnostics(onProgress?: ProgressCallback, extensionPat
         // Local environment: check steps 1-2
         checks[0].status = 'running';
         onProgress?.(checks);
-        updateCheck(0, await checkLocalProxy(localProxyPort));
+        updateCheck(0, await checkLocalProxy(localProxyPort, localProxyHost));
 
         checks[1].status = 'running';
         onProgress?.(checks);
