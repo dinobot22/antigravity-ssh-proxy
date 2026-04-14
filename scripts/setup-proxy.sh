@@ -4,14 +4,15 @@ set -e
 # ============================================================================
 # Antigravity SSH Proxy - Setup Script
 # ============================================================================
-# This script creates wrapper scripts for language servers to route their
-# traffic through a proxy using mgraftcp-fakedns.
+# This script creates wrapper scripts for remote AI tool binaries to route
+# their traffic through a proxy using mgraftcp-fakedns.
 #
 # Environment Variables:
 #   PROXY_HOST       - Proxy server host (default: __PROXY_HOST__)
 #   PROXY_PORT       - Proxy server port (default: __PROXY_PORT__)
 #   PROXY_TYPE       - Proxy type: http or socks5 (default: __PROXY_TYPE__)
 #   EXTENSION_PATH   - Current extension's exact path (optional)
+#   TARGET_APPS      - Comma-separated managed targets: antigravity,codex
 #   EXTENSION_VERSION - Current extension version for update detection
 #   DEBUG            - Set to 1 for verbose output
 # ============================================================================
@@ -20,8 +21,9 @@ set -e
 PROXY_HOST="${PROXY_HOST:-__PROXY_HOST__}"
 PROXY_PORT="${PROXY_PORT:-__PROXY_PORT__}"
 PROXY_TYPE="${PROXY_TYPE:-__PROXY_TYPE__}"
-EXTENSION_PATH="${EXTENSION_PATH:-}"
-EXTENSION_VERSION="${EXTENSION_VERSION:-unknown}"
+EXTENSION_PATH="${EXTENSION_PATH:-__EXTENSION_PATH__}"
+TARGET_APPS="${TARGET_APPS:-__TARGET_APPS__}"
+EXTENSION_VERSION="${EXTENSION_VERSION:-__EXTENSION_VERSION__}"
 PROXY_ADDR="${PROXY_HOST}:${PROXY_PORT}"
 
 # ============================================================================
@@ -59,6 +61,7 @@ echo ""
 ARCH=$(uname -m)
 info_log "System Architecture: $ARCH"
 info_log "Proxy Config: $PROXY_ADDR ($PROXY_TYPE)"
+info_log "Managed Targets: $TARGET_APPS"
 info_log "Extension Version: $EXTENSION_VERSION"
 if [ -n "$EXTENSION_PATH" ]; then
     info_log "Extension Path: $EXTENSION_PATH"
@@ -141,6 +144,38 @@ is_wrapper_script() {
     head -1 "$target" 2>/dev/null | grep -q "^#!/bin/bash"
 }
 
+is_target_enabled() {
+    local target="$1"
+    [[ ",$TARGET_APPS," == *",$target,"* ]]
+}
+
+describe_target() {
+    local target="$1"
+    case "$target" in
+        antigravity) echo "Antigravity Language Server" ;;
+        codex) echo "OpenAI Codex CLI" ;;
+        *) echo "$target" ;;
+    esac
+}
+
+collect_targets() {
+    if is_target_enabled "antigravity"; then
+        find "$HOME/.antigravity-server/bin" \
+            -path "*/extensions/antigravity/bin/language_server_linux_*" \
+            -type f 2>/dev/null | grep -v ".bak$" | while IFS= read -r target; do
+            [ -n "$target" ] && printf 'antigravity\t%s\n' "$target"
+        done
+    fi
+
+    if is_target_enabled "codex"; then
+        find "$HOME/.antigravity-server/extensions" \
+            -path "*/openai.chatgpt-*/bin/linux-*/codex" \
+            -type f 2>/dev/null | grep -v ".bak$" | while IFS= read -r target; do
+            [ -n "$target" ] && printf 'codex\t%s\n' "$target"
+        done
+    fi
+}
+
 # Determine if wrapper needs to be updated
 # Returns: 0 = needs update (with reason in stdout), 1 = up-to-date
 check_needs_update() {
@@ -178,46 +213,51 @@ check_needs_update() {
 }
 
 # ============================================================================
-# Find Language Servers
+# Find Managed Targets
 # ============================================================================
-echo "[SEARCH] Looking for language servers..."
-TARGETS=$(find "$HOME/.antigravity-server/bin" -path "*/extensions/antigravity/bin/language_server_linux_*" -type f 2>/dev/null | grep -v ".bak$")
+echo "[SEARCH] Looking for managed targets..."
+TARGETS=$(collect_targets)
 
 if [ -z "$TARGETS" ]; then
-    error_log "No language servers found!"
+    error_log "No managed targets found!"
     exit 1
 fi
 
 TARGET_COUNT=$(echo "$TARGETS" | wc -l)
-info_log "Found $TARGET_COUNT language server(s)"
+info_log "Found $TARGET_COUNT managed target(s)"
 echo ""
 
 # ============================================================================
-# Process Each Language Server
+# Process Each Managed Target
 # ============================================================================
 CONFIGURED_COUNT=0
 SKIPPED_COUNT=0
 
-echo "[PROCESS] Configuring language servers..."
+echo "[PROCESS] Configuring managed targets..."
 echo ""
 
 while IFS= read -r TARGET; do
     [ -z "$TARGET" ] && continue
+
+    TARGET_KIND=$(printf '%s' "$TARGET" | cut -f1)
+    TARGET_PATH=$(printf '%s' "$TARGET" | cut -f2-)
+    TARGET_LABEL=$(describe_target "$TARGET_KIND")
     
     echo "----------------------------------------"
-    echo "Target: $TARGET"
-    BAK="${TARGET}.bak"
+    echo "Target: $TARGET_LABEL"
+    echo "Path: $TARGET_PATH"
+    BAK="${TARGET_PATH}.bak"
     
     # Check if update is needed
-    if UPDATE_REASON=$(check_needs_update "$TARGET"); then
+    if UPDATE_REASON=$(check_needs_update "$TARGET_PATH"); then
         info_log "Update needed: $UPDATE_REASON"
         
         # Log current wrapper state for debugging
-        if is_wrapper_script "$TARGET"; then
+        if is_wrapper_script "$TARGET_PATH"; then
             debug_log "Current wrapper state:"
-            debug_log "  Version: $(get_wrapper_version "$TARGET")"
-            debug_log "  Proxy: $(get_wrapper_proxy_addr "$TARGET")"
-            debug_log "  Type: $(get_wrapper_proxy_type "$TARGET")"
+            debug_log "  Version: $(get_wrapper_version "$TARGET_PATH")"
+            debug_log "  Proxy: $(get_wrapper_proxy_addr "$TARGET_PATH")"
+            debug_log "  Type: $(get_wrapper_proxy_type "$TARGET_PATH")"
         fi
     else
         # Already up-to-date
@@ -228,12 +268,12 @@ while IFS= read -r TARGET; do
 
     # Create backup if needed
     if [ ! -f "$BAK" ]; then
-        if is_wrapper_script "$TARGET"; then
+        if is_wrapper_script "$TARGET_PATH"; then
             error_log "Target is a wrapper script but no backup exists!"
             error_log "Cannot proceed without original binary backup"
             continue
         fi
-        mv "$TARGET" "$BAK"
+        mv "$TARGET_PATH" "$BAK"
         info_log "Backup created: $BAK"
     else
         debug_log "Backup already exists: $BAK"
@@ -245,12 +285,13 @@ while IFS= read -r TARGET; do
     # The wrapper script dynamically finds mgraftcp-fakedns at runtime,
     # allowing version upgrades without breaking existing wrappers.
     # ========================================================================
-cat > "$TARGET" << 'WRAPPER_EOF'
+cat > "$TARGET_PATH" << 'WRAPPER_EOF'
 #!/bin/bash
 # ============================================================================
-# Antigravity SSH Proxy - Language Server Wrapper
+# Antigravity SSH Proxy - Managed Tool Wrapper
 # ============================================================================
 # WRAPPER_VERSION="__EXTENSION_VERSION_PLACEHOLDER__"
+# WRAPPED_TARGET="__WRAPPED_TARGET_PLACEHOLDER__"
 # GENERATED="__TIMESTAMP_PLACEHOLDER__"
 # ============================================================================
 
@@ -328,21 +369,23 @@ fi
 WRAPPER_EOF
 
     # Replace placeholders with actual values
-    sed -i "s|__PROXY_ADDR_PLACEHOLDER__|$PROXY_ADDR|g" "$TARGET"
-    sed -i "s|__PROXY_TYPE_PLACEHOLDER__|$PROXY_TYPE|g" "$TARGET"
-    sed -i "s|__EXTENSION_VERSION_PLACEHOLDER__|$EXTENSION_VERSION|g" "$TARGET"
-    sed -i "s|__TIMESTAMP_PLACEHOLDER__|$(date -Iseconds)|g" "$TARGET"
+    sed -i "s|__PROXY_ADDR_PLACEHOLDER__|$PROXY_ADDR|g" "$TARGET_PATH"
+    sed -i "s|__PROXY_TYPE_PLACEHOLDER__|$PROXY_TYPE|g" "$TARGET_PATH"
+    sed -i "s|__EXTENSION_VERSION_PLACEHOLDER__|$EXTENSION_VERSION|g" "$TARGET_PATH"
+    sed -i "s|__WRAPPED_TARGET_PLACEHOLDER__|$TARGET_KIND|g" "$TARGET_PATH"
+    sed -i "s|__TIMESTAMP_PLACEHOLDER__|$(date -Iseconds)|g" "$TARGET_PATH"
     
     # Set extension bin path if provided
     if [ -n "$EXTENSION_PATH" ]; then
         EXTENSION_BIN_DIR="$EXTENSION_PATH/resources/bin"
-        sed -i "s|__EXTENSION_BIN_PATH_PLACEHOLDER__|$EXTENSION_BIN_DIR|g" "$TARGET"
+        sed -i "s|__EXTENSION_BIN_PATH_PLACEHOLDER__|$EXTENSION_BIN_DIR|g" "$TARGET_PATH"
     else
-        sed -i "s|__EXTENSION_BIN_PATH_PLACEHOLDER__||g" "$TARGET"
+        sed -i "s|__EXTENSION_BIN_PATH_PLACEHOLDER__||g" "$TARGET_PATH"
     fi
 
-    chmod +x "$TARGET"
+    chmod +x "$TARGET_PATH"
     info_log "Wrapper created successfully"
+    info_log "  Target: $TARGET_LABEL"
     info_log "  Version: $EXTENSION_VERSION"
     info_log "  Proxy: $PROXY_ADDR ($PROXY_TYPE)"
     CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
@@ -371,12 +414,12 @@ echo "========================================"
 if [ $CONFIGURED_COUNT -gt 0 ]; then
     echo ""
     echo "Setup complete: proxy=$PROXY_ADDR"
-    echo "Note: Reload window to apply changes to language server."
+    echo "Note: Reload window to apply changes to managed tools."
 elif [ $SKIPPED_COUNT -gt 0 ]; then
     echo ""
     echo "Already configured with $PROXY_ADDR (v$EXTENSION_VERSION)"
 else
     echo ""
-    error_log "No language servers were configured!"
+    error_log "No managed targets were configured!"
     exit 1
 fi

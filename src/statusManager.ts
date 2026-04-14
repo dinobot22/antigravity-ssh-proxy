@@ -100,6 +100,12 @@ const i18n = {
         localPortTip: '💡 此端口需与本地代理软件（如 Clash、V2Ray）的监听端口一致，默认通常为 7890',
         remotePortTipLocal: '💡 此端口即 SSH 隧道在远端的监听端口，必须与远端 ATP 面板中「代理端口」的值保持一致',
         remotePortTipRemote: '💡 此端口即 SSH 隧道在远端的监听端口，必须与本地 ATP 面板中「远程端口」的值保持一致',
+        codexTools: 'Codex 工具',
+        syncCodexProfile: '同步本地 Codex Profile',
+        restoreCodexProfile: '恢复远端 Codex Profile',
+        rebucketCodexHistory: '合并 Codex 历史',
+        restoreCodexHistory: '恢复 Codex 历史备份',
+        codexToolsNote: 'Profile 同步依赖本地 ATP 的 Codex bridge；如果刚更新本地 ATP，通常需要断开并重新连接 SSH 才会带上新的转发端口。',
     },
     en: {
         title: 'Antigravity SSH Proxy(ATP)',
@@ -179,6 +185,12 @@ const i18n = {
         localPortTip: '💡 Must match your local proxy software port (e.g., Clash, V2Ray). Default is usually 7890',
         remotePortTipLocal: '💡 This is the SSH tunnel port on the remote side. It must match the "Proxy Port" in the Remote ATP panel',
         remotePortTipRemote: '💡 This is the SSH tunnel port on the remote side. It must match the "Remote Port" in the Local ATP panel',
+        codexTools: 'Codex Tools',
+        syncCodexProfile: 'Sync Local Codex Profile',
+        restoreCodexProfile: 'Restore Remote Codex Profile',
+        rebucketCodexHistory: 'Rebucket Codex History',
+        restoreCodexHistory: 'Restore Codex History Backup',
+        codexToolsNote: 'Profile sync uses ATP\'s local Codex bridge. If you just updated local ATP, reconnect SSH so the extra bridge RemoteForward can take effect.',
     }
 };
 
@@ -388,6 +400,18 @@ export class StatusManager {
                         break;
                     case 'rollback':
                         vscode.commands.executeCommand('antigravity-ssh-proxy.rollback');
+                        break;
+                    case 'syncCodexProfile':
+                        vscode.commands.executeCommand('antigravity-ssh-proxy.syncCodexProfile');
+                        break;
+                    case 'restoreCodexProfile':
+                        vscode.commands.executeCommand('antigravity-ssh-proxy.restoreCodexProfile');
+                        break;
+                    case 'rebucketCodexHistory':
+                        vscode.commands.executeCommand('antigravity-ssh-proxy.rebucketCodexHistory');
+                        break;
+                    case 'restoreCodexHistory':
+                        vscode.commands.executeCommand('antigravity-ssh-proxy.restoreCodexHistory');
                         break;
                 }
             },
@@ -1432,6 +1456,23 @@ export class StatusManager {
             </div>
         </div>
         
+        ${!isLocal ? `
+        <div class="card" style="margin-bottom: 16px;">
+            <div class="card-header">
+                <span class="card-title"><span class="card-title-icon">⌘</span>${t.codexTools}</span>
+            </div>
+            <div class="card-body">
+                <div class="actions" style="margin-top: 0;">
+                    <button class="btn" onclick="syncCodexProfile()">${t.syncCodexProfile}</button>
+                    <button class="btn" onclick="restoreCodexProfile()">${t.restoreCodexProfile}</button>
+                    <button class="btn" onclick="rebucketCodexHistory()">${t.rebucketCodexHistory}</button>
+                    <button class="btn" onclick="restoreCodexHistory()">${t.restoreCodexHistory}</button>
+                </div>
+                <div class="tip-note" style="margin-top: 10px;">${t.codexToolsNote}</div>
+            </div>
+        </div>
+        ` : ''}
+
         <!-- Tips & Traffic Grid -->
         <div class="grid">
             <!-- Tips Card -->
@@ -1496,6 +1537,22 @@ export class StatusManager {
         
         function rollback() {
             vscode.postMessage({ command: 'rollback' });
+        }
+
+        function syncCodexProfile() {
+            vscode.postMessage({ command: 'syncCodexProfile' });
+        }
+
+        function restoreCodexProfile() {
+            vscode.postMessage({ command: 'restoreCodexProfile' });
+        }
+
+        function rebucketCodexHistory() {
+            vscode.postMessage({ command: 'rebucketCodexHistory' });
+        }
+
+        function restoreCodexHistory() {
+            vscode.postMessage({ command: 'restoreCodexHistory' });
         }
         
         function saveConfig() {

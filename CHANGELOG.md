@@ -2,6 +2,28 @@
 
 All notable changes to the "Antigravity SSH Proxy" extension will be documented in this file.
 
+## [0.0.17] - 2026-04-14
+
+### Added
+
+- **Codex as a managed target app**: ATP can now wrap both `antigravity` and `codex` through the new `targetApps` configuration.
+- **Codex profile sync and restore**: Added commands to sync local `~/.codex/auth.json`, `config.toml`, and optional `installation_id` to the remote host, with automatic backup and restore.
+- **Codex profile bridge**: Added a local-only bridge exposed through SSH `RemoteForward` so the remote side can securely fetch the local Codex profile without relying on remote-wide proxy environment inheritance.
+- **Codex history rebucketing**: Added backup-first tools to migrate Codex history between `model_provider` buckets and restore the previous state if needed.
+- **Codex diagnostics and panel actions**: Added Codex wrapper, process, and profile bridge checks to diagnostics, plus panel buttons for sync, restore, rebucket, and rollback-style recovery flows.
+
+### Changed
+
+- **Fork positioning and docs**: Updated README/README.en to explain what this fork changes on top of ATP, the design rationale, and the intended testing/usage path for Codex.
+- **Packaging for fork releases**: Updated packaging metadata so VSIX contents are explicitly controlled for manual fork builds and release tags.
+- **Remote setup language**: Generalized several user-facing messages from "language server only" to "managed tools", matching the new multi-target design.
+
+### Why
+
+- **Preserve ATP's original philosophy**: Keep proxying focused on the managed remote process instead of forcing the entire remote extension host or shell environment to inherit proxy variables.
+- **Improve Codex usability on restricted networks**: Treat remote Codex login as a profile portability problem where possible, because profile sync is often more reliable than remote OAuth in restricted environments.
+- **Keep history recoverable**: Make provider-bucket migration explicit, backed up, and reversible instead of trying to auto-merge Codex history silently.
+
 ## [0.0.15] - 2026-02-27
 
 ### Added

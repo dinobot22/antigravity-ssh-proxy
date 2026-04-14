@@ -9,6 +9,23 @@ import { generateSetupScript, generateRollbackScript } from './remoteSetup';
 import { StatusManager } from './statusManager';
 import { DiagnosticPanel } from './diagnostics/diagnosticPanel';
 import { TrafficPanel } from './traffic/trafficPanel';
+import { formatTargetAppsEnv, getConfiguredTargetApps } from './targets';
+import {
+	applyCodexProfileSnapshot,
+	restoreLatestCodexProfileBackup
+} from './codexProfile';
+import {
+	getCodexHistoryBuckets,
+	previewCodexHistoryRebucket,
+	rebucketCodexHistory,
+	restoreLatestCodexHistoryBackup
+} from './codexHistory';
+import {
+	CodexProfileBridgeServer,
+	fetchCodexProfileSnapshotFromBridge,
+	getRemoteCodexProfileBridgePort,
+	LOCAL_CODEX_PROFILE_BRIDGE_PORT
+} from './codexProfileBridge';
 
 const execAsync = promisify(exec);
 
@@ -16,6 +33,7 @@ let outputChannel: vscode.OutputChannel;
 let statusManager: StatusManager;
 let diagnosticPanel: DiagnosticPanel;
 let trafficPanel: TrafficPanel;
+let codexProfileBridgeServer: CodexProfileBridgeServer | undefined;
 
 function log(message: string): void {
 	const timestamp = new Date().toISOString();
@@ -174,7 +192,12 @@ function getAntigravityConfigPath(): string {
 /**
  * Update the SSH config files using the Include approach
  */
-async function updateSSHConfigFile(remotePort: number, localPort: number, enable: boolean): Promise<void> {
+async function updateSSHConfigFile(
+	remotePort: number,
+	localPort: number,
+	enable: boolean,
+	codexBridgeRemotePort: number
+): Promise<void> {
 	const mainConfigPath = getSSHConfigPath();
 	const antiConfigPath = getAntigravityConfigPath();
 
@@ -189,6 +212,7 @@ async function updateSSHConfigFile(remotePort: number, localPort: number, enable
 				`# Generated at: ${new Date().toISOString()}`,
 				'Match all',
 				`    RemoteForward ${remotePort} 127.0.0.1:${localPort}`,
+				`    RemoteForward ${codexBridgeRemotePort} 127.0.0.1:${LOCAL_CODEX_PROFILE_BRIDGE_PORT}`,
 				'    ExitOnForwardFailure no',
 				'    VisualHostKey no',
 				'',
@@ -325,7 +349,7 @@ async function activateLocal(context: vscode.ExtensionContext) {
 		const lp = cfg.get<number>('localProxyPort', 7890);
 		const rp = cfg.get<number>('remoteProxyPort', 7890);
 		const enabled = cfg.get<boolean>('enableLocalForwarding', true);
-		await updateSSHConfigFile(rp, lp, enabled);
+		await updateSSHConfigFile(rp, lp, enabled, getRemoteCodexProfileBridgePort(rp));
 		statusManager.updateSSHConfigStatus(enabled, rp);
 	});
 
@@ -333,12 +357,28 @@ async function activateLocal(context: vscode.ExtensionContext) {
 	const enable = config.get<boolean>('enableLocalForwarding', true);
 	const localPort = config.get<number>('localProxyPort', 7890);
 	const remotePort = config.get<number>('remoteProxyPort', 7890);
+	const codexBridgeRemotePort = getRemoteCodexProfileBridgePort(remotePort);
 
-	log(`Config: enable=${enable}, localPort=${localPort}, remotePort=${remotePort}`);
+	log(`Config: enable=${enable}, localPort=${localPort}, remotePort=${remotePort}, codexBridgeRemotePort=${codexBridgeRemotePort}`);
+
+	codexProfileBridgeServer = new CodexProfileBridgeServer();
+	try {
+		const bridgeResult = await codexProfileBridgeServer.start();
+		log(
+			bridgeResult.reusedExisting
+				? `Codex profile bridge already running on 127.0.0.1:${LOCAL_CODEX_PROFILE_BRIDGE_PORT}`
+				: `Codex profile bridge listening on 127.0.0.1:${LOCAL_CODEX_PROFILE_BRIDGE_PORT}`
+		);
+	} catch (error) {
+		log(`Failed to start Codex profile bridge: ${error}`);
+		vscode.window.showWarningMessage(
+			`ATP could not start the local Codex profile bridge on 127.0.0.1:${LOCAL_CODEX_PROFILE_BRIDGE_PORT}. Codex profile sync may be unavailable until this port is free.`
+		);
+	}
 
 	// Auto-setup on activation
 	if (enable) {
-		await updateSSHConfigFile(remotePort, localPort, true);
+		await updateSSHConfigFile(remotePort, localPort, true, codexBridgeRemotePort);
 		statusManager.updateSSHConfigStatus(true, remotePort);
 		if (!await checkPortAvailable('127.0.0.1', localPort)) {
 			vscode.window.showWarningMessage(
@@ -363,7 +403,7 @@ async function activateLocal(context: vscode.ExtensionContext) {
 				const lp = cfg.get<number>('localProxyPort', 7890);
 				const rp = cfg.get<number>('remoteProxyPort', 7890);
 				const enabled = cfg.get<boolean>('enableLocalForwarding', true);
-				await updateSSHConfigFile(rp, lp, enabled);
+				await updateSSHConfigFile(rp, lp, enabled, getRemoteCodexProfileBridgePort(rp));
 				statusManager.updateSSHConfigStatus(enabled, rp);
 				await statusManager.refreshStatus();
 			}
@@ -376,14 +416,14 @@ async function activateLocal(context: vscode.ExtensionContext) {
 			const cfg = vscode.workspace.getConfiguration('antigravity-ssh-proxy');
 			const lp = cfg.get<number>('localProxyPort', 7890);
 			const rp = cfg.get<number>('remoteProxyPort', 7890);
-			await updateSSHConfigFile(rp, lp, true);
+			await updateSSHConfigFile(rp, lp, true, getRemoteCodexProfileBridgePort(rp));
 			statusManager.updateSSHConfigStatus(true, rp);
 			await statusManager.refreshStatus();
 			vscode.window.showInformationMessage('SSH port forwarding enabled');
 		}),
 
 		vscode.commands.registerCommand('antigravity-ssh-proxy.disableForwarding', async () => {
-			await updateSSHConfigFile(0, 0, false);
+			await updateSSHConfigFile(0, 0, false, 0);
 			statusManager.updateSSHConfigStatus(false);
 			await statusManager.refreshStatus();
 			vscode.window.showInformationMessage('SSH port forwarding disabled');
@@ -432,12 +472,25 @@ async function ensureMgraftcpExecutable(extensionPath: string): Promise<void> {
 	}
 }
 
+async function readExtensionVersion(extensionPath: string): Promise<string> {
+	try {
+		const packageJsonPath = path.join(extensionPath, 'package.json');
+		const packageJsonContent = await fs.readFile(packageJsonPath, 'utf-8');
+		const packageJson = JSON.parse(packageJsonContent);
+		return packageJson.version || 'unknown';
+	} catch (error) {
+		log(`Failed to read package.json: ${error}`);
+		return 'unknown';
+	}
+}
+
 async function activateRemote(context: vscode.ExtensionContext) {
 	const config = vscode.workspace.getConfiguration('antigravity-ssh-proxy');
 	// Remote only cares about remoteProxyHost, remoteProxyPort, and proxyType
 	const remoteHost = config.get<string>('remoteProxyHost', '127.0.0.1');
 	const remotePort = config.get<number>('remoteProxyPort', 7890);
 	const proxyType = config.get<string>('proxyType', 'http');
+	const targetApps = getConfiguredTargetApps(config);
 
 	if (process.platform !== 'linux') {
 		log(`Skipping setup: unsupported platform '${process.platform}' (only Linux is supported)`);
@@ -446,6 +499,7 @@ async function activateRemote(context: vscode.ExtensionContext) {
 
 	// Use extensionUri.fsPath for correct remote path resolution
 	const extensionPath = context.extensionUri.fsPath;
+	const extensionVersion = await readExtensionVersion(extensionPath);
 
 	// Ensure mgraftcp binary has execute permission before setup
 	await ensureMgraftcpExecutable(extensionPath);
@@ -456,12 +510,14 @@ async function activateRemote(context: vscode.ExtensionContext) {
 		const host = cfg.get<string>('remoteProxyHost', '127.0.0.1');
 		const port = cfg.get<number>('remoteProxyPort', 7890);
 		const type = cfg.get<string>('proxyType', 'http');
-		log(`Config changed from panel, re-running setup: ${host}:${port} (${type})`);
-		const success = await runSetupScriptSilently(host, port, type, extensionPath);
+		const apps = getConfiguredTargetApps(cfg);
+		log(`Config changed from panel, re-running setup: ${host}:${port} (${type}) targets=${formatTargetAppsEnv(apps)}`);
+		const success = await runSetupScriptSilently(host, port, type, extensionPath, extensionVersion, apps);
 		statusManager.updateLanguageServerStatus(success);
 	});
 
 	log(`Remote Proxy: ${remoteHost}:${remotePort} (${proxyType})`);
+	log(`Managed targets: ${formatTargetAppsEnv(targetApps)}`);
 
 	// 初始刷新状态
 	await statusManager.refreshStatus();
@@ -469,7 +525,7 @@ async function activateRemote(context: vscode.ExtensionContext) {
 	// Auto-run setup script
 	log(`Extension path: ${extensionPath}`);
 	log('Auto-running setup script...');
-	const setupSuccess = await runSetupScriptSilently(remoteHost, remotePort, proxyType, extensionPath);
+	const setupSuccess = await runSetupScriptSilently(remoteHost, remotePort, proxyType, extensionPath, extensionVersion, targetApps);
 	statusManager.updateLanguageServerStatus(setupSuccess);
 
 	// Watch config changes (from VS Code settings)
@@ -477,13 +533,15 @@ async function activateRemote(context: vscode.ExtensionContext) {
 		vscode.workspace.onDidChangeConfiguration(async (e: vscode.ConfigurationChangeEvent) => {
 			if (e.affectsConfiguration('antigravity-ssh-proxy.remoteProxyHost') ||
 				e.affectsConfiguration('antigravity-ssh-proxy.remoteProxyPort') ||
-				e.affectsConfiguration('antigravity-ssh-proxy.proxyType')) {
+				e.affectsConfiguration('antigravity-ssh-proxy.proxyType') ||
+				e.affectsConfiguration('antigravity-ssh-proxy.targetApps')) {
 				const cfg = vscode.workspace.getConfiguration('antigravity-ssh-proxy');
 				const host = cfg.get<string>('remoteProxyHost', '127.0.0.1');
 				const port = cfg.get<number>('remoteProxyPort', 7890);
 				const type = cfg.get<string>('proxyType', 'http');
-				log(`Config changed, re-running setup: ${host}:${port} (${type})`);
-				const success = await runSetupScriptSilently(host, port, type, extensionPath);
+				const apps = getConfiguredTargetApps(cfg);
+				log(`Config changed, re-running setup: ${host}:${port} (${type}) targets=${formatTargetAppsEnv(apps)}`);
+				const success = await runSetupScriptSilently(host, port, type, extensionPath, extensionVersion, apps);
 				statusManager.updateLanguageServerStatus(success);
 				await statusManager.refreshStatus();
 			}
@@ -492,12 +550,166 @@ async function activateRemote(context: vscode.ExtensionContext) {
 
 	// Remote commands
 	context.subscriptions.push(
+		vscode.commands.registerCommand('antigravity-ssh-proxy.syncCodexProfile', async () => {
+			try {
+				log('Starting Codex profile sync via local bridge');
+				const snapshot = await fetchCodexProfileSnapshotFromBridge(remoteHost, remotePort);
+
+				if (!snapshot) {
+					vscode.window.showErrorMessage(
+						'ATP could not read the local Codex profile from the bridge.'
+					);
+					return;
+				}
+
+				const result = await applyCodexProfileSnapshot(snapshot);
+				log(`Codex profile synced. provider=${snapshot.modelProvider ?? 'unknown'} backup=${result.backupDir}`);
+				promptReloadWindow(
+					`Codex profile synced from your local machine${snapshot.modelProvider ? ` (${snapshot.modelProvider})` : ''}. Reload the remote window to refresh ChatGPT/Codex authentication.`
+				);
+				vscode.window.showInformationMessage(
+					`Codex profile synced. Backup saved at ${result.backupDir}`
+				);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				log(`Codex profile sync failed: ${message}`);
+				vscode.window.showErrorMessage(
+					`Codex profile sync failed: ${message}. If you just updated ATP locally, reconnect the SSH remote window so the new bridge port forward can take effect.`
+				);
+			}
+		}),
+
+		vscode.commands.registerCommand('antigravity-ssh-proxy.restoreCodexProfile', async () => {
+			try {
+				const result = await restoreLatestCodexProfileBackup();
+				log(`Codex profile restored from ${result.backupDir}`);
+				promptReloadWindow(
+					`Remote Codex profile restored${result.modelProvider ? ` (${result.modelProvider})` : ''}. Reload the remote window to refresh ChatGPT/Codex authentication.`
+				);
+				vscode.window.showInformationMessage(
+					`Remote Codex profile restored from ${result.backupDir}`
+				);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				log(`Codex profile restore failed: ${message}`);
+				vscode.window.showErrorMessage(`Codex profile restore failed: ${message}`);
+			}
+		}),
+
+		vscode.commands.registerCommand('antigravity-ssh-proxy.rebucketCodexHistory', async () => {
+			try {
+				const buckets = await getCodexHistoryBuckets();
+				if (buckets.length === 0) {
+					vscode.window.showWarningMessage(
+						'ATP did not find any Codex history buckets under ~/.codex.'
+					);
+					return;
+				}
+
+				const sourceSelection = await vscode.window.showQuickPick(
+					buckets.map(bucket => ({
+						label: bucket.provider,
+						description: `${bucket.rolloutCount} rollout(s), ${bucket.threadCount} thread row(s)`,
+						bucket
+					})),
+					{
+						title: 'Rebucket Codex History',
+						placeHolder: 'Choose the source provider bucket to migrate from'
+					}
+				);
+
+				if (!sourceSelection) {
+					return;
+				}
+
+				const previewForDefault = await previewCodexHistoryRebucket(
+					sourceSelection.bucket.provider,
+					sourceSelection.bucket.provider
+				);
+
+				const targetProvider = await vscode.window.showInputBox({
+					title: 'Rebucket Codex History',
+					prompt: 'Enter the target provider bucket name',
+					value: previewForDefault.currentProvider ?? sourceSelection.bucket.provider,
+					ignoreFocusOut: true,
+					validateInput: value => {
+						if (!value.trim()) {
+							return 'Provider name cannot be empty';
+						}
+						return undefined;
+					}
+				});
+
+				if (!targetProvider) {
+					return;
+				}
+
+				const normalizedTargetProvider = targetProvider.trim();
+				if (normalizedTargetProvider === sourceSelection.bucket.provider) {
+					vscode.window.showInformationMessage(
+						'Source provider and target provider are the same. No history rebucketing is needed.'
+					);
+					return;
+				}
+
+				const preview = await previewCodexHistoryRebucket(
+					sourceSelection.bucket.provider,
+					normalizedTargetProvider
+				);
+
+				const proceed = await vscode.window.showWarningMessage(
+					`This will rewrite ${preview.rolloutCount} rollout file(s) and ${preview.threadCount} thread row(s) from "${preview.sourceProvider}" to "${preview.targetProvider}". ATP will create a restorable backup first.`,
+					{ modal: true },
+					'Rebucket History'
+				);
+
+				if (proceed !== 'Rebucket History') {
+					return;
+				}
+
+				const result = await rebucketCodexHistory(
+					sourceSelection.bucket.provider,
+					normalizedTargetProvider
+				);
+
+				log(`Codex history rebucketed from ${result.sourceProvider} to ${result.targetProvider}. backup=${result.backupDir}`);
+				promptReloadWindow(
+					`Codex history rebucketed from ${result.sourceProvider} to ${result.targetProvider}. Reload the remote window to refresh the history view.`
+				);
+				vscode.window.showInformationMessage(
+					`Codex history rebucketed. Backup saved at ${result.backupDir}`
+				);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				log(`Codex history rebucket failed: ${message}`);
+				vscode.window.showErrorMessage(`Codex history rebucket failed: ${message}`);
+			}
+		}),
+
+		vscode.commands.registerCommand('antigravity-ssh-proxy.restoreCodexHistory', async () => {
+			try {
+				const result = await restoreLatestCodexHistoryBackup();
+				log(`Codex history restored from ${result.backupDir}`);
+				promptReloadWindow(
+					`Codex history restored${result.sourceProvider && result.targetProvider ? ` (${result.targetProvider} -> ${result.sourceProvider})` : ''}. Reload the remote window to refresh the history view.`
+				);
+				vscode.window.showInformationMessage(
+					`Codex history restored from ${result.backupDir}`
+				);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				log(`Codex history restore failed: ${message}`);
+				vscode.window.showErrorMessage(`Codex history restore failed: ${message}`);
+			}
+		}),
+
 		vscode.commands.registerCommand('antigravity-ssh-proxy.setup', () => {
 			const cfg = vscode.workspace.getConfiguration('antigravity-ssh-proxy');
 			const type = cfg.get<string>('proxyType', 'http');
+			const apps = getConfiguredTargetApps(cfg);
 			const terminal = vscode.window.createTerminal('Antigravity Setup');
 			terminal.show();
-			const script = generateSetupScript(remoteHost, remotePort, type, extensionPath);
+			const script = generateSetupScript(remoteHost, remotePort, type, extensionPath, apps, extensionVersion);
 			terminal.sendText(`cat > /tmp/ag_setup.sh << 'EOF'\n${script}\nEOF`);
 			terminal.sendText('bash /tmp/ag_setup.sh');
 		}),
@@ -770,23 +982,19 @@ async function showStartupStatus(proxyHost: string, proxyPort: number): Promise<
  * Run setup script silently in background (idempotent)
  * @returns true if setup was successful or already configured
  */
-async function runSetupScriptSilently(proxyHost: string, proxyPort: number, proxyType: string, extensionPath: string): Promise<boolean> {
+async function runSetupScriptSilently(
+	proxyHost: string,
+	proxyPort: number,
+	proxyType: string,
+	extensionPath: string,
+	extensionVersion: string,
+	targetApps: readonly string[]
+): Promise<boolean> {
 	const scriptPath = path.join(extensionPath, 'scripts', 'setup-proxy.sh');
 
 	try {
 		// Ensure script is executable
 		await execAsync(`chmod +x "${scriptPath}"`);
-
-		// Read extension version from package.json
-		const packageJsonPath = path.join(extensionPath, 'package.json');
-		let extensionVersion = 'unknown';
-		try {
-			const packageJsonContent = await fs.readFile(packageJsonPath, 'utf-8');
-			const packageJson = JSON.parse(packageJsonContent);
-			extensionVersion = packageJson.version || 'unknown';
-		} catch (e) {
-			log(`Failed to read package.json: ${e}`);
-		}
 
 		// Execute script directly with environment variables for proxy config
 		const env = {
@@ -795,7 +1003,8 @@ async function runSetupScriptSilently(proxyHost: string, proxyPort: number, prox
 			PROXY_PORT: String(proxyPort),
 			PROXY_TYPE: proxyType,
 			EXTENSION_PATH: extensionPath,  // Current extension's exact path
-			EXTENSION_VERSION: extensionVersion  // Extension version for update detection
+			EXTENSION_VERSION: extensionVersion,  // Extension version for update detection
+			TARGET_APPS: targetApps.join(',')
 		};
 
 		const { stdout, stderr } = await execAsync(`bash "${scriptPath}" 2>&1`, { env });
@@ -819,11 +1028,11 @@ async function runSetupScriptSilently(proxyHost: string, proxyPort: number, prox
 				const killed = await killLanguageServer();
 				if (killed) {
 					promptReloadWindow(
-						'Antigravity proxy updated. Language Server restarted. Please reload the window to reconnect.'
+						'ATP proxy updated. Managed tools were refreshed. Please reload the window to reconnect.'
 					);
 				} else {
 					vscode.window.showWarningMessage(
-						'Proxy updated but Language Server needs restart. ' +
+						'Proxy updated but a managed tool still needs restart. ' +
 						'Run in terminal: kill $(pgrep -f language_server_linux) && then reload window.',
 						'Reload Now'
 					).then(selection => {
@@ -835,7 +1044,7 @@ async function runSetupScriptSilently(proxyHost: string, proxyPort: number, prox
 			} else {
 				// Non-persistent mode or LS not running - regular reload is fine
 				promptReloadWindow(
-					'Antigravity proxy configured. Reload window to apply changes to the language server.'
+					'ATP proxy configured. Reload window to apply changes to managed tools.'
 				);
 			}
 			return true;
@@ -860,12 +1069,12 @@ async function runSetupScriptSilently(proxyHost: string, proxyPort: number, prox
 					const killed = await killLanguageServer();
 					if (killed) {
 						promptReloadWindow(
-							'Language Server was restarted to enable proxy. Please reload the window to reconnect.'
+							'A managed tool was restarted to enable proxy. Please reload the window to reconnect.'
 						);
 					} else {
 						// Fallback to manual instructions
 						vscode.window.showWarningMessage(
-							'Proxy configured but Language Server needs restart. ' +
+							'Proxy configured but a managed tool still needs restart. ' +
 							'Run in terminal: kill $(pgrep -f language_server_linux) && then reload window.',
 							'Reload Now'
 						).then(selection => {
@@ -878,7 +1087,7 @@ async function runSetupScriptSilently(proxyHost: string, proxyPort: number, prox
 					// Non-persistent mode: regular reload should work
 					log('Setup: Prompting reload');
 					promptReloadWindow(
-						'Proxy is configured but not active. Reload window to enable proxy for the language server.'
+						'Proxy is configured but not active. Reload window to enable proxy for managed tools.'
 					);
 				}
 			} else if (lsActuallyUsingProxy) {
@@ -905,9 +1114,16 @@ export async function deactivate() {
 	}
 	if (isRunningLocally()) {
 		try {
-			await updateSSHConfigFile(0, 0, false);
+			await updateSSHConfigFile(0, 0, false, 0);
 		} catch (e) {
 			log(`Cleanup during deactivation failed: ${e}`);
+		}
+		if (codexProfileBridgeServer) {
+			try {
+				await codexProfileBridgeServer.stop();
+			} catch (error) {
+				log(`Failed to stop Codex profile bridge: ${error}`);
+			}
 		}
 	}
 }

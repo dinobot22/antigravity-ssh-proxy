@@ -2,18 +2,32 @@
   "name": "antigravity-ssh-proxy",
   "publisher": "dinobot22",
   "displayName": "Antigravity SSH Proxy (ATP)",
-  "description": "Easily fix connectivity issues for the Antigravity remote server. This extension ensures your remote coding tools can bypass server firewalls by securely routing Antigravity's traffic through your local computer or a designated server gateway.",
+  "description": "Route Antigravity and Codex remote traffic through your local proxy over SSH so remote AI tools keep working behind firewalls.",
   "icon": "ATP.jpg",
-  "version": "0.0.15",
+  "version": "0.0.17",
   "repository": {
     "type": "git",
-    "url": "https://github.com/dinobot22/antigravity-ssh-proxy"
+    "url": "https://github.com/Eternal-Augustus/antigravity-ssh-proxy"
+  },
+  "vsce": {
+    "dependencies": false,
+    "yarn": false
   },
   "engines": {
     "vscode": "^1.100.0"
   },
   "categories": [
     "Other"
+  ],
+  "files": [
+    "dist/**",
+    "resources/**",
+    "scripts/**",
+    "ATP.jpg",
+    "README.md",
+    "README.en.md",
+    "CHANGELOG.md",
+    "LICENSE"
   ],
   "extensionKind": [
     "workspace",
@@ -32,6 +46,22 @@
       {
         "command": "antigravity-ssh-proxy.rollback",
         "title": "Antigravity SSH Proxy: Rollback Remote Environment"
+      },
+      {
+        "command": "antigravity-ssh-proxy.syncCodexProfile",
+        "title": "Antigravity SSH Proxy: Sync Local Codex Profile To Remote"
+      },
+      {
+        "command": "antigravity-ssh-proxy.restoreCodexProfile",
+        "title": "Antigravity SSH Proxy: Restore Remote Codex Profile Backup"
+      },
+      {
+        "command": "antigravity-ssh-proxy.rebucketCodexHistory",
+        "title": "Antigravity SSH Proxy: Rebucket Codex History"
+      },
+      {
+        "command": "antigravity-ssh-proxy.restoreCodexHistory",
+        "title": "Antigravity SSH Proxy: Restore Codex History Backup"
       },
       {
         "command": "antigravity-ssh-proxy.enableForwarding",
@@ -116,12 +146,29 @@
           ],
           "scope": "machine-overridable",
           "description": "The proxy protocol type. Choose HTTP for most proxy software (Clash, V2Ray, etc), or SOCKS5 if your proxy only supports SOCKS5."
+        },
+        "antigravity-ssh-proxy.targetApps": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "antigravity",
+              "codex"
+            ]
+          },
+          "default": [
+            "antigravity",
+            "codex"
+          ],
+          "scope": "machine-overridable",
+          "description": "Remote applications that ATP should wrap with mgraftcp. Antigravity wraps the Antigravity language server, and codex wraps the OpenAI Codex CLI bundled in the ChatGPT extension."
         }
       }
     }
   },
   "scripts": {
     "build:package": "npm run package",
+    "vscode:prepublish": "npm run package",
     "compile": "npm run check-types && npm run lint && node esbuild.js",
     "watch": "npm-run-all -p watch:*",
     "watch:esbuild": "node esbuild.js --watch",

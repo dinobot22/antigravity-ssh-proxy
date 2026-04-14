@@ -5,6 +5,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { getRemoteCodexProfileBridgePort } from '../codexProfileBridge';
 
 const execAsync = promisify(exec);
 
@@ -423,6 +424,132 @@ async function checkLanguageServerProcess(): Promise<DiagnosticCheck> {
     return check;
 }
 
+async function checkCodexWrapper(extensionPath?: string): Promise<DiagnosticCheck> {
+    const check: DiagnosticCheck = {
+        id: 'codex-wrapper',
+        name: 'Codex Wrapper',
+        status: 'running'
+    };
+
+    try {
+        const { stdout } = await execAsync(
+            `find "$HOME/.antigravity-server/extensions" -path "*/openai.chatgpt-*/bin/linux-*/codex" -type f 2>/dev/null | grep -v ".bak$" | head -1`
+        );
+        const targetPath = stdout.trim();
+
+        if (!targetPath) {
+            check.status = 'warning';
+            check.message = 'Codex binary not found';
+            check.suggestion = 'This may be normal if the ChatGPT/Codex extension is not installed on the remote host.';
+            return check;
+        }
+
+        const content = await fs.readFile(targetPath, 'utf-8');
+        if (content.startsWith('#!/bin/bash') && (content.includes('WRAPPED_TARGET="codex"') || content.includes('mgraftcp'))) {
+            check.status = 'success';
+
+            let wrapperVersion = 'unknown';
+            const versionMatch = content.match(/WRAPPER_VERSION="([^"]+)"/);
+            if (versionMatch) {
+                wrapperVersion = versionMatch[1];
+            }
+
+            let extensionVersion = 'unknown';
+            if (extensionPath) {
+                try {
+                    const packageJsonContent = await fs.readFile(path.join(extensionPath, 'package.json'), 'utf-8');
+                    extensionVersion = JSON.parse(packageJsonContent).version || 'unknown';
+                } catch {
+                    // ignore
+                }
+            }
+
+            check.message = `Codex wrapper is configured (Wrapper v${wrapperVersion}, Extension v${extensionVersion})`;
+            if (extensionVersion !== 'unknown' && wrapperVersion !== 'unknown' && wrapperVersion !== extensionVersion) {
+                check.status = 'warning';
+                check.message += ' - Version mismatch, update recommended';
+                check.suggestion = 'Run "Setup Remote Environment" to refresh the Codex wrapper.';
+            }
+        } else {
+            check.status = 'warning';
+            check.message = 'Codex is not wrapped with mgraftcp';
+            check.suggestion = 'Run "Setup Remote Environment" to configure the Codex wrapper.';
+        }
+    } catch (error) {
+        check.status = 'warning';
+        check.message = `Could not verify Codex wrapper: ${error}`;
+        check.suggestion = 'Run "Setup Remote Environment" if Codex proxying is required.';
+    }
+
+    return check;
+}
+
+async function checkCodexProcess(): Promise<DiagnosticCheck> {
+    const check: DiagnosticCheck = {
+        id: 'codex-process',
+        name: 'Codex Process',
+        status: 'running'
+    };
+
+    try {
+        const { stdout } = await execAsync(`ps -eo pid,args | grep -E 'codex|mgraftcp-fakedns' | grep -v grep`);
+        const lines = stdout.trim().split('\n').filter(Boolean);
+
+        const codexLines = lines.filter(line => line.includes('/codex') || line.includes(' codex ') || line.includes('codex.bak'));
+        if (codexLines.length === 0) {
+            check.status = 'warning';
+            check.message = 'Codex is not running';
+            check.suggestion = 'This is normal until you open ChatGPT/Codex or start an agent request.';
+            return check;
+        }
+
+        const wrappedLine = lines.find(line => line.includes('mgraftcp-fakedns') && line.includes('codex.bak'));
+        const pid = codexLines[0]?.trim().split(/\s+/, 2)[0] ?? '?';
+
+        if (wrappedLine) {
+            check.status = 'success';
+            check.message = `Codex (PID ${pid}) is running through mgraftcp`;
+        } else {
+            check.status = 'warning';
+            check.message = `Codex (PID ${pid}) is running but ATP did not detect an mgraftcp wrapper`;
+            check.suggestion = 'Trigger a fresh Codex request after ATP setup, or reload the remote window.';
+        }
+    } catch {
+        check.status = 'warning';
+        check.message = 'Codex is not running';
+        check.suggestion = 'This is normal until you open ChatGPT/Codex or start an agent request.';
+    }
+
+    return check;
+}
+
+async function checkCodexProfileBridge(remoteProxyHost: string, remoteProxyPort: number): Promise<DiagnosticCheck> {
+    const bridgePort = getRemoteCodexProfileBridgePort(remoteProxyPort);
+    const check: DiagnosticCheck = {
+        id: 'codex-bridge',
+        name: 'Codex Profile Bridge',
+        status: 'running'
+    };
+
+    try {
+        const reachable = await checkPort(remoteProxyHost, bridgePort);
+        if (reachable) {
+            check.status = 'success';
+            check.message = `Local Codex profile bridge is reachable at ${remoteProxyHost}:${bridgePort}`;
+        } else {
+            check.status = 'warning';
+            check.message = `Cannot reach Codex profile bridge at ${remoteProxyHost}:${bridgePort}`;
+            check.suggestion = 'Reconnect the SSH remote after updating local ATP so the extra RemoteForward for Codex profile sync can take effect.';
+        }
+    } catch (error) {
+        check.status = 'warning';
+        check.message = `Could not verify Codex profile bridge: ${error}`;
+        check.suggestion = 'Reconnect the SSH remote after updating local ATP.';
+    }
+
+    return check;
+}
+
 /**
  * Check external connectivity through proxy
  * Tests both HTTP and SOCKS5 protocols and reports availability of each
@@ -515,6 +642,9 @@ export async function runDiagnostics(onProgress?: ProgressCallback, extensionPat
         { id: 'mgraftcp', name: 'mgraftcp-fakedns Binary', status: 'pending' },
         { id: 'ls-wrapper', name: 'Language Server Wrapper', status: 'pending' },
         { id: 'ls-process', name: 'Language Server Process', status: 'pending' },
+        { id: 'codex-wrapper', name: 'Codex Wrapper', status: 'pending' },
+        { id: 'codex-process', name: 'Codex Process', status: 'pending' },
+        { id: 'codex-bridge', name: 'Codex Profile Bridge', status: 'pending' },
         { id: 'external-connectivity', name: 'External Connectivity', status: 'pending' }
     ];
 
@@ -535,7 +665,7 @@ export async function runDiagnostics(onProgress?: ProgressCallback, extensionPat
         updateCheck(1, await checkSSHConfig(remoteProxyPort));
 
         // Skip remote-only checks
-        for (let i = 2; i < 7; i++) {
+        for (let i = 2; i < checks.length; i++) {
             checks[i].status = 'warning';
             checks[i].message = 'Skipped (remote-only check)';
         }
@@ -567,7 +697,19 @@ export async function runDiagnostics(onProgress?: ProgressCallback, extensionPat
 
         checks[6].status = 'running';
         onProgress?.(checks);
-        updateCheck(6, await checkExternalConnectivity(remoteProxyHost, remoteProxyPort, proxyType));
+        updateCheck(6, await checkCodexWrapper(extensionPath));
+
+        checks[7].status = 'running';
+        onProgress?.(checks);
+        updateCheck(7, await checkCodexProcess());
+
+        checks[8].status = 'running';
+        onProgress?.(checks);
+        updateCheck(8, await checkCodexProfileBridge(remoteProxyHost, remoteProxyPort));
+
+        checks[9].status = 'running';
+        onProgress?.(checks);
+        updateCheck(9, await checkExternalConnectivity(remoteProxyHost, remoteProxyPort, proxyType));
     }
 
     // Determine overall status
@@ -631,4 +773,3 @@ export function generateReportText(report: DiagnosticReport): string {
     lines.push('=== End of Report ===');
     return lines.join('\n');
 }
-
