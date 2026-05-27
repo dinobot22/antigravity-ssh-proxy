@@ -322,6 +322,8 @@ async function activateLocal(context: vscode.ExtensionContext) {
 	// 设置配置变更回调（用于面板中修改配置时触发）
 	statusManager.setConfigChangeCallback(async () => {
 		const cfg = vscode.workspace.getConfiguration('antigravity-ssh-proxy');
+		const autoWrite = cfg.get<boolean>('autoWriteSSHConfig', true);
+		if (!autoWrite) { return; }
 		const lp = cfg.get<number>('localProxyPort', 7890);
 		const rp = cfg.get<number>('remoteProxyPort', 7890);
 		const enabled = cfg.get<boolean>('enableLocalForwarding', true);
@@ -337,7 +339,8 @@ async function activateLocal(context: vscode.ExtensionContext) {
 	log(`Config: enable=${enable}, localPort=${localPort}, remotePort=${remotePort}`);
 
 	// Auto-setup on activation
-	if (enable) {
+	const autoWrite = config.get<boolean>('autoWriteSSHConfig', true);
+	if (enable && autoWrite) {
 		await updateSSHConfigFile(remotePort, localPort, true);
 		statusManager.updateSSHConfigStatus(true, remotePort);
 		if (!await checkPortAvailable('127.0.0.1', localPort)) {
@@ -360,6 +363,11 @@ async function activateLocal(context: vscode.ExtensionContext) {
 		vscode.workspace.onDidChangeConfiguration(async (e: vscode.ConfigurationChangeEvent) => {
 			if (e.affectsConfiguration('antigravity-ssh-proxy')) {
 				const cfg = vscode.workspace.getConfiguration('antigravity-ssh-proxy');
+				const autoW = cfg.get<boolean>('autoWriteSSHConfig', true);
+				if (!autoW) {
+					await statusManager.refreshStatus();
+					return;
+				}
 				const lp = cfg.get<number>('localProxyPort', 7890);
 				const rp = cfg.get<number>('remoteProxyPort', 7890);
 				const enabled = cfg.get<boolean>('enableLocalForwarding', true);
@@ -904,6 +912,9 @@ export async function deactivate() {
 		statusManager.stopAutoRefresh();
 	}
 	if (isRunningLocally()) {
+		const cfg = vscode.workspace.getConfiguration('antigravity-ssh-proxy');
+		const autoWrite = cfg.get<boolean>('autoWriteSSHConfig', true);
+		if (!autoWrite) { return; }
 		try {
 			await updateSSHConfigFile(0, 0, false);
 		} catch (e) {

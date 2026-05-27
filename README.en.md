@@ -26,10 +26,10 @@ This is an extension for **Antigravity** ([Open VSX Link](https://open-vsx.org/e
 
 This extension must be installed on **BOTH** your local machine and remote server:
 
-| Location | Role |
-|----------|------|
-| **Local** | Manages SSH port forwarding (`~/.ssh/config.antigravity`) |
-| **Remote** | Configures Language Server proxy wrapper (mgraftcp) |
+| Location   | Role                                                      |
+| ---------- | --------------------------------------------------------- |
+| **Local**  | Manages SSH port forwarding (`~/.ssh/config.antigravity`) |
+| **Remote** | Configures Language Server proxy wrapper (mgraftcp)       |
 
 ---
 
@@ -72,24 +72,61 @@ Before you begin, ensure the following conditions are met:
 
 ---
 
+### Persistent Configuration (Optional)
+
+By default, ATP automatically writes `~/.ssh/config.antigravity` on startup and cleans it up when the extension deactivates. If you want the SSH config to **persist** (not change with the extension lifecycle), you can disable automatic writing.
+
+**Recommended (One-Click Persistence):**
+
+Since auto-write is enabled by default, the SSH config is already written when the extension starts. So you simply:
+
+1. Start the extension normally, configure **Local Port** and **Remote Port** in the ATP Panel, and click Save
+2. Once the config is working, turn off **"Auto Write SSH Config"** and Save again
+
+The SSH config that was already written will be preserved and won't be overwritten or cleaned up by the extension anymore.
+
+**Manual Method:**
+
+Alternatively, after disabling auto-write, you can manually add the config to `~/.ssh/config`:
+
+```ssh-config
+Match all
+    RemoteForward 7890 127.0.0.1:7890
+    ExitOnForwardFailure no
+```
+
+> Replace `7890` with your actual port numbers (local proxy port and remote port)
+
+**Benefits:**
+
+- SSH config persists across IDE restarts
+- You can configure per-Host rules instead of a global `Match all`
+- Ideal for advanced users managing multiple servers with different configurations
+
+> ⚠️ With auto-write disabled, you must manually update `~/.ssh/config` when changing ports
+
+---
+
 ### Troubleshooting
 
 If issues persist after configuration, check the following logs:
 
-| Log Channel | Location |
-|-------------|----------|
-| `Antigravity` | Output Panel → Antigravity |
+| Log Channel             | Location                             |
+| ----------------------- | ------------------------------------ |
+| `Antigravity`           | Output Panel → Antigravity           |
 | `Antigravity SSH Proxy` | Output Panel → Antigravity SSH Proxy |
 
 ## Extension Settings
 
-| Setting | Description |
-|---------|-------------|
-| `enableLocalForwarding` | Enable SSH reverse tunnel forwarding. |
-| `localProxyPort` | Local proxy port on your computer. |
-| `remoteProxyHost` | Proxy host address on the remote server. |
-| `remoteProxyPort` | Proxy port on the remote server. |
-| `showStatusOnStartup` | Show status notification when connecting to remote server. |
+| Setting                 | Description                                                                 |
+| ----------------------- | --------------------------------------------------------------------------- |
+| `enableLocalForwarding` | Enable SSH reverse tunnel forwarding.                                       |
+| `autoWriteSSHConfig`    | Automatically write SSH config. Disable to manage `~/.ssh/config` manually. |
+| `localProxyPort`        | Local proxy port on your computer.                                          |
+| `remoteProxyHost`       | Proxy host address on the remote server.                                    |
+| `remoteProxyPort`       | Proxy port on the remote server.                                            |
+| `proxyType`             | Proxy protocol type (HTTP or SOCKS5).                                       |
+| `showStatusOnStartup`   | Show status notification when connecting to remote server.                  |
 
 ## Uninstall
 

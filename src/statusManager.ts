@@ -41,6 +41,7 @@ const i18n = {
         configured: '已配置',
         notConfigured: '未配置',
         enableForwarding: '启用转发',
+        autoWriteSSH: '自动写入SSH配置',
         localPort: '本地端口',
         remotePort: '远程端口',
         proxyHost: '代理地址',
@@ -120,6 +121,7 @@ const i18n = {
         configured: 'Configured',
         notConfigured: 'Not Configured',
         enableForwarding: 'Enable Forwarding',
+        autoWriteSSH: 'Auto Write SSH Config',
         localPort: 'Local Port',
         remotePort: 'Remote Port',
         proxyHost: 'Proxy Host',
@@ -452,6 +454,7 @@ export class StatusManager {
         remoteProxyPort?: number;
         remoteProxyHost?: string;
         enableLocalForwarding?: boolean;
+        autoWriteSSHConfig?: boolean;
         proxyType?: string;
     }): Promise<void> {
         const config = vscode.workspace.getConfiguration('antigravity-ssh-proxy');
@@ -470,6 +473,9 @@ export class StatusManager {
             }
             if (newConfig.enableLocalForwarding !== undefined) {
                 await config.update('enableLocalForwarding', newConfig.enableLocalForwarding, vscode.ConfigurationTarget.Global);
+            }
+            if (newConfig.autoWriteSSHConfig !== undefined) {
+                await config.update('autoWriteSSHConfig', newConfig.autoWriteSSHConfig, vscode.ConfigurationTarget.Global);
             }
             if (newConfig.proxyType !== undefined) {
                 await config.update('proxyType', newConfig.proxyType, vscode.ConfigurationTarget.Global);
@@ -627,6 +633,7 @@ export class StatusManager {
         const isLocal = status.runningLocation === 'local';
         const config = vscode.workspace.getConfiguration('antigravity-ssh-proxy');
         const enableForwarding = config.get<boolean>('enableLocalForwarding', true);
+        const autoWriteSSH = config.get<boolean>('autoWriteSSHConfig', true);
         const proxyType = config.get<string>('proxyType', 'http');
         const t = i18n[this.currentLang];
         const trafficStats = this.trafficCollector.getStats();
@@ -1375,6 +1382,13 @@ export class StatusManager {
                     </label>
                 </div>
                 <div class="input-row">
+                    <label>${t.autoWriteSSH}</label>
+                    <label class="toggle">
+                        <input type="checkbox" id="autoWriteSSH" ${autoWriteSSH ? 'checked' : ''}>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="input-row">
                     <label>${t.localPort}</label>
                     <input type="number" id="localProxyPort" value="${status.localProxyPort}" min="1" max="65535">
                 </div>
@@ -1502,6 +1516,7 @@ export class StatusManager {
             const config = {};
             if (isLocal) {
                 config.enableLocalForwarding = document.getElementById('enableForwarding').checked;
+                config.autoWriteSSHConfig = document.getElementById('autoWriteSSH').checked;
                 config.localProxyPort = parseInt(document.getElementById('localProxyPort').value);
                 config.remoteProxyPort = parseInt(document.getElementById('remoteProxyPort').value);
             } else {

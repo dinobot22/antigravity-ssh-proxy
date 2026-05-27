@@ -25,10 +25,10 @@
 
 此插件必须同时安装在 **本地** 和 **远程服务器** 上：
 
-| 位置 | 职责 |
-|------|------|
+| 位置     | 职责                                                |
+| -------- | --------------------------------------------------- |
 | **本地** | 管理 SSH 端口转发配置 (`~/.ssh/config.antigravity`) |
-| **远程** | 配置 Language Server 代理包装器 (mgraftcp) |
+| **远程** | 配置 Language Server 代理包装器 (mgraftcp)          |
 
 ---
 
@@ -56,7 +56,7 @@
 
 1. 打开一个本地的 Antigravity项目并在扩展中搜索并安装 **Antigravity SSH Proxy** 插件(目前安装量比较小,可能需要按名称排序才能找到)
 2. 安装成功后点击左下角 **ATP 面板**，配置 `localProxyPort` 为您本地代理端口（如 `7890`）
-3. 检查面板状态，确认本地配置无异常. 
+3. 检查面板状态，确认本地配置无异常.
 
 **Step 2 — 远程安装**
 
@@ -68,35 +68,72 @@
 1. 按照提示执行 **Reload Window** 重启窗口. PS: 由于远程的需要对language server进行wrapper, 插件有的时候会提示您**多次**重启远程窗口,**按提示重启**. 本地的Antigravity窗口一般不需要重启)
 2. 打开右下角 **ATP 面板**，运行 **连接诊断** 检查代理状态
 3. 显示正常后，远程 AI 功能即可使用 🎉
-   
+
 **Step 4 — 简单重试**
 
 如果发现功能不能正常使用时:
+
 1. 关闭所有的(本地+远程)Antigravity窗口
 2. 先打开本地的Antigravity窗口,等待本地插件启动完成(左下角ATP变绿),
 3. 再点击左边的SSH链接远程服务器进行重试, 连接远程终端时一般有两个选项
-> 1. 在当前窗口链接远程服务(connect SSH host in current window)
-> 2. 打开新窗口链接远程服务(connect SSH host in new window) **<-- 选择这个**
+   > 1. 在当前窗口链接远程服务(connect SSH host in current window)
+   > 2. 打开新窗口链接远程服务(connect SSH host in new window) **<-- 选择这个**
 
 进行重试,查看是否可行
-   
+
 **当系统提示需要重启窗口时，请重启以确保功能正常使用**
 
 ---
 
+### 持久化配置（可选）
+
+默认情况下，ATP 会在每次启动时自动写入 `~/.ssh/config.antigravity`，并在插件停用时自动清理。如果您希望 SSH 配置**持久生效**（不随插件生命周期变化），可以关闭自动写入功能。
+
+**推荐方式（一键持久化）：**
+
+由于自动写入默认开启，插件启动时就会自动写入 SSH 配置。因此您只需：
+
+1. 正常启动插件，在 ATP 面板中配置好 **本地端口** 和 **远程端口**，点击保存
+2. 确认配置已生效后，关闭 **「自动写入SSH配置」** 开关，再次保存
+
+这样插件已写入的 SSH 配置会被保留，后续不再被插件覆盖或清理。
+
+**手动方式：**
+
+您也可以关闭自动写入后，手动在 `~/.ssh/config` 中添加配置：
+
+```ssh-config
+Match all
+    RemoteForward 7890 127.0.0.1:7890
+    ExitOnForwardFailure no
+```
+
+> 将 `7890` 替换为您的实际端口号（本地代理端口和远程端口）
+
+**优势：**
+
+- SSH 配置不再随插件启停而变化，重启 IDE 后配置依然生效
+- 可以针对特定 Host 配置，而非 `Match all` 全局生效
+- 适合有多台服务器、需要差异化配置的高级用户
+
+> ⚠️ 关闭自动写入后，端口变更等操作需要您手动更新 `~/.ssh/config`
+
+---
 
 ### 故障排查
 
 如果配置+重试后仍无法正常使用，提交Bug日志时请附带一下远程链接服务器的日志信息：
+
 > 1.  ATP页面中运行诊断, 复制诊断结果
 > 2.  Antigravity的Output 面板内容中的
->    
-> | 日志频道 | 查看路径 |
-> |---------|---------| 
-> | `Antigravity` | Output 面板 → Antigravity |
+>
+> | 日志频道                | 查看路径                            |
+> | ----------------------- | ----------------------------------- |
+> | `Antigravity`           | Output 面板 → Antigravity           |
 > | `Antigravity SSH Proxy` | Output 面板 → Antigravity SSH Proxy |
 
 > 4. 一些额外的系统信息
+>
 > ```bash
 >    uname -a                          # 内核版本
 >    uname -m                          # 架构 (x86_64/aarch64)
@@ -105,17 +142,19 @@
 >    ls -la /.dockerenv                # 是否在 Docker 中
 >    lscpu | grep -i aes               # 查看cpu情况
 >    ps -aux | grep language_server
->```
+> ```
 
 ## 扩展设置
 
-| 设置 | 说明 |
-|------|------|
-| `enableLocalForwarding` | 启用 SSH 反向隧道转发。 |
-| `localProxyPort` | 本地计算机上的代理端口。 |
-| `remoteProxyHost` | 远程服务器上的代理主机地址。 |
-| `remoteProxyPort` | 远程服务器上的代理端口。 |
-| `showStatusOnStartup` | 连接远程服务器时显示状态通知。 |
+| 设置                    | 说明                                                  |
+| ----------------------- | ----------------------------------------------------- |
+| `enableLocalForwarding` | 启用 SSH 反向隧道转发。                               |
+| `autoWriteSSHConfig`    | 自动写入 SSH 配置。关闭后需手动管理 `~/.ssh/config`。 |
+| `localProxyPort`        | 本地计算机上的代理端口。                              |
+| `remoteProxyHost`       | 远程服务器上的代理主机地址。                          |
+| `remoteProxyPort`       | 远程服务器上的代理端口。                              |
+| `proxyType`             | 代理协议类型（HTTP 或 SOCKS5）。                      |
+| `showStatusOnStartup`   | 连接远程服务器时显示状态通知。                        |
 
 ## 卸载说明
 
