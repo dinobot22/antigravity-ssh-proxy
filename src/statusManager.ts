@@ -284,7 +284,7 @@ export class StatusManager {
 
         if (this.isLocal) {
             this.currentStatus.localProxyReachable = await this.checkPort(
-                '127.0.0.1',
+                config.get<string>('localProxyHost', '127.0.0.1'),
                 this.currentStatus.localProxyPort
             );
         } else {

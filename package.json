@@ -79,6 +79,12 @@
           "scope": "application",
           "description": "Use local proxy via SSH tunnel. If true, the extension will manage ~/.ssh/config.antigravity and forward the remote port to your local machine."
         },
+        "antigravity-ssh-proxy.localProxyHost": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "scope": "application",
+          "description": "Local proxy host address on your computer. Only used when enableLocalForwarding is true. Change from 127.0.0.1 if your proxy listens on a different address."
+        },
         "antigravity-ssh-proxy.localProxyPort": {
           "type": "number",
           "default": 7890,
