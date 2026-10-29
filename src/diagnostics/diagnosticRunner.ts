@@ -227,6 +227,27 @@ async function checkMgraftcp(extensionPath?: string): Promise<DiagnosticCheck> {
             }
         }
         
+        // Method 1.5: Check server mgraftcp directory
+        if (!binaryPath) {
+            for (const dirName of SERVER_DIR_NAMES) {
+                const directBinaryPath = path.join(homeDir, dirName, 'mgraftcp', binaryName);
+                const directLibPath = path.join(homeDir, dirName, 'mgraftcp', libName);
+                try {
+                    await fs.access(directBinaryPath, fs.constants.X_OK);
+                    binaryPath = directBinaryPath;
+                    try {
+                        await fs.access(directLibPath, fs.constants.R_OK);
+                        libPath = directLibPath;
+                    } catch {
+                        // Lib file is optional
+                    }
+                    break;
+                } catch {
+                    // Not found
+                }
+            }
+        }
+
         // Method 2: Fallback - search in all possible server dirs and versions
         if (!binaryPath) {
             for (const dirName of SERVER_DIR_NAMES) {
@@ -293,70 +314,158 @@ async function checkLanguageServerWrapper(extensionPath?: string): Promise<Diagn
             check.suggestion = 'Please install "Antigravity SSH Proxy" extension on the remote server: Open Extensions sidebar (Ctrl+Shift+X) → Search "Antigravity SSH Proxy" → Click "Install in SSH: <host>" button.';
             return check;
         }
-        
-        // Search in all possible server directories
-        let targetPath = '';
+
+        // 1. Check Antigravity IDE v2.6.0+ target (~/.gemini/bin/agy)
+        const agyPath = path.join(homeDir, '.gemini', 'bin', 'agy');
+        const agyBakPath = path.join(homeDir, '.gemini', 'bin', 'agy.bak');
+
+        let agyExists = false;
+        let agyIsWrapper = false;
+        let agyHasBak = false;
+        let agyWrapperVersion = 'unknown';
+
+        try {
+            await fs.access(agyPath);
+            agyExists = true;
+            const content = await fs.readFile(agyPath, 'utf-8');
+            if (content.startsWith('#!/bin/bash') && content.includes('mgraftcp')) {
+                agyIsWrapper = true;
+                const versionMatch = content.match(/WRAPPER_VERSION="([^"]+)"/);
+                if (versionMatch) {
+                    agyWrapperVersion = versionMatch[1];
+                }
+            }
+        } catch {
+            // Not found
+        }
+
+        try {
+            await fs.access(agyBakPath);
+            agyHasBak = true;
+        } catch {
+            // Backup not found
+        }
+
+        // 2. Check legacy language server targets (pre-v2.6.0)
+        let legacyPath = '';
+        let legacyIsWrapper = false;
+        let legacyHasBak = false;
+        let legacyWrapperVersion = 'unknown';
+
         for (const dirName of SERVER_DIR_NAMES) {
             try {
                 const { stdout } = await execAsync(
-                    `find "$HOME/${dirName}/bin" -path "*/extensions/antigravity/bin/language_server_linux_*" -type f 2>/dev/null | grep -v ".bak$" | head -1`
+                    `find "$HOME/${dirName}/bin" -path "*/extensions/antigravity/bin/language_server_linux_*" -type f 2>/dev/null | grep -v "\\.bak$" | head -1`
                 );
-                targetPath = stdout.trim();
-                if (targetPath) { break; }
+                const found = stdout.trim();
+                if (found) {
+                    legacyPath = found;
+                    const legacyBakPath = `${found}.bak`;
+                    const content = await fs.readFile(legacyPath, 'utf-8');
+                    if (content.startsWith('#!/bin/bash') && content.includes('mgraftcp')) {
+                        legacyIsWrapper = true;
+                        const versionMatch = content.match(/WRAPPER_VERSION="([^"]+)"/);
+                        if (versionMatch) {
+                            legacyWrapperVersion = versionMatch[1];
+                        }
+                    }
+                    try {
+                        await fs.access(legacyBakPath);
+                        legacyHasBak = true;
+                    } catch {
+                        legacyHasBak = false;
+                    }
+                    break;
+                }
             } catch {
                 // continue to next directory
             }
         }
 
-        if (!targetPath) {
+        // Read extension version from package.json if available
+        let extensionVersion = 'unknown';
+        if (extensionPath) {
+            try {
+                const packageJsonPath = path.join(extensionPath, 'package.json');
+                const packageJsonContent = await fs.readFile(packageJsonPath, 'utf-8');
+                const packageJson = JSON.parse(packageJsonContent);
+                extensionVersion = packageJson.version || 'unknown';
+            } catch {
+                // Ignore error
+            }
+        }
+
+        // Neither detected
+        if (!agyExists && !legacyPath) {
             check.status = 'warning';
-            check.message = 'Language server binary not found';
-            check.suggestion = 'This may be normal if Antigravity extension is not installed.';
+            check.message = 'Neither Antigravity IDE v2.6.0+ (~/.gemini/bin/agy) nor legacy language server found';
+            check.suggestion = 'For Antigravity IDE v2.6.0+, ensure ~/.gemini/bin/agy exists (configure VS Code http.proxy for initial download). For legacy versions, ensure Antigravity extension is installed.';
             return check;
         }
 
-        // Check if it's a wrapper script
-        const content = await fs.readFile(targetPath, 'utf-8');
-        if (content.startsWith('#!/bin/bash') && content.includes('mgraftcp')) {
-            check.status = 'success';
-            
-            // Extract wrapper version
-            let wrapperVersion = 'unknown';
-            const versionMatch = content.match(/WRAPPER_VERSION="([^"]+)"/);
-            if (versionMatch) {
-                wrapperVersion = versionMatch[1];
-            }
+        const messages: string[] = [];
+        let hasError = false;
+        let hasWarning = false;
+        let hasSuccess = false;
 
-            // Get extension version
-            let extensionVersion = 'unknown';
-            if (extensionPath) {
-                try {
-                    const packageJsonPath = path.join(extensionPath, 'package.json');
-                    const packageJsonContent = await fs.readFile(packageJsonPath, 'utf-8');
-                    const packageJson = JSON.parse(packageJsonContent);
-                    extensionVersion = packageJson.version || 'unknown';
-                } catch {
-                    // Ignore error
+        // Process v2.6.0+ agy status
+        if (agyExists) {
+            if (agyIsWrapper && agyHasBak) {
+                hasSuccess = true;
+                let msg = `v2.6.0+ (~/.gemini/bin/agy): wrapper and backup (.bak) properly configured (Wrapper v${agyWrapperVersion}, Extension v${extensionVersion})`;
+                if (extensionVersion !== 'unknown' && agyWrapperVersion !== 'unknown' &&
+                    agyWrapperVersion !== extensionVersion && extensionVersion !== '__EXTENSION_VERSION_PLACEHOLDER__') {
+                    hasWarning = true;
+                    msg += ' - Version mismatch, update recommended';
                 }
+                messages.push(msg);
+            } else if (agyIsWrapper && !agyHasBak) {
+                hasError = true;
+                messages.push('v2.6.0+ (~/.gemini/bin/agy): wrapper is configured, but backup (agy.bak) is missing!');
+            } else {
+                hasWarning = true;
+                messages.push('v2.6.0+ (~/.gemini/bin/agy): binary exists but is NOT wrapped with mgraftcp');
             }
-
-            check.message = `Language server wrapper is configured (Wrapper v${wrapperVersion}, Extension v${extensionVersion})`;
-            
-            // Warn if versions mismatch
-            if (extensionVersion !== 'unknown' && wrapperVersion !== 'unknown' && 
-                wrapperVersion !== extensionVersion && extensionVersion !== '__EXTENSION_VERSION_PLACEHOLDER__') {
-                check.status = 'warning';
-                check.message += ' - Version mismatch, update recommended';
-                check.suggestion = 'Run "Setup Remote Environment" command to update the wrapper.';
-            }
-        } else {
-            check.status = 'warning';
-            check.message = 'Language server is not wrapped with mgraftcp';
-            check.suggestion = 'Run "Setup Remote Environment" command to configure the wrapper.';
         }
+
+        // Process legacy status
+        if (legacyPath) {
+            const binaryName = path.basename(legacyPath);
+            if (legacyIsWrapper && legacyHasBak) {
+                hasSuccess = true;
+                let msg = `legacy (${binaryName}): wrapper and backup (.bak) properly configured (Wrapper v${legacyWrapperVersion}, Extension v${extensionVersion})`;
+                if (extensionVersion !== 'unknown' && legacyWrapperVersion !== 'unknown' &&
+                    legacyWrapperVersion !== extensionVersion && extensionVersion !== '__EXTENSION_VERSION_PLACEHOLDER__') {
+                    hasWarning = true;
+                    msg += ' - Version mismatch, update recommended';
+                }
+                messages.push(msg);
+            } else if (legacyIsWrapper && !legacyHasBak) {
+                hasError = true;
+                messages.push(`legacy (${binaryName}): wrapper is configured, but backup (${binaryName}.bak) is missing!`);
+            } else {
+                hasWarning = true;
+                messages.push(`legacy (${binaryName}): binary exists but is NOT wrapped with mgraftcp`);
+            }
+        }
+
+        check.message = messages.join('; ');
+
+        if (hasError) {
+            check.status = 'error';
+            check.suggestion = 'Backup binary is missing. Please reinstall or restore the original binary before setting up proxy.';
+        } else if (hasWarning && !hasSuccess) {
+            check.status = 'warning';
+            check.suggestion = 'Run "Setup Remote Environment" command to configure the wrapper.';
+        } else if (hasWarning && hasSuccess) {
+            check.status = 'warning';
+            check.suggestion = 'Run "Setup Remote Environment" command to update the wrapper.';
+        } else {
+            check.status = 'success';
+        }
+
     } catch (error) {
         const errorStr = String(error);
-        // Check for Windows path error indicators
         if (errorStr.includes(':\\') || errorStr.includes('\\Users\\') || errorStr.includes('系统找不到')) {
             check.status = 'error';
             check.message = 'Remote extension not installed on the remote server';
@@ -373,7 +482,7 @@ async function checkLanguageServerWrapper(extensionPath?: string): Promise<Diagn
 
 /**
  * Check Language Server process status
- * Detects if LS is running, in persistent mode, and using proxy
+ * Detects if LS / agy is running, in persistent mode, and using proxy
  */
 async function checkLanguageServerProcess(): Promise<DiagnosticCheck> {
     const check: DiagnosticCheck = {
@@ -383,60 +492,77 @@ async function checkLanguageServerProcess(): Promise<DiagnosticCheck> {
     };
 
     try {
-        const { stdout } = await execAsync('ps aux | grep language_server_linux | grep -v grep');
+        const { stdout } = await execAsync("ps aux | grep -E '(language_server_linux|\\.gemini/bin/agy(\\.bak)?\\s+--hub)' | grep -v grep");
         const lines = stdout.trim().split('\n').filter(l => l.length > 0);
 
         if (lines.length === 0) {
             check.status = 'warning';
-            check.message = 'Language Server is not running';
-            check.suggestion = 'This may be normal if you haven\'t used any AI features yet. The LS starts on demand.';
+            check.message = 'Language Server / agy hub is not running';
+            check.suggestion = 'This may be normal if you haven\'t used any AI features yet. The server starts on demand.';
             return check;
         }
 
-        // Check if mgraftcp is wrapping the LS
+        // Check if mgraftcp is wrapping the process in the process table
         const hasMgraftcpWrapper = lines.some(line => line.includes('mgraftcp'));
         
-        // Find the actual LS process
+        // Find the actual binary process
         let isPersistent = false;
         let lsPid = 0;
-        
-        for (const line of lines) {
+        let isProxied = false;
+        let processType = 'Language Server';
+
+        // Prioritize v2.6.0+ (.gemini/bin/agy) over legacy language_server_linux if both exist
+        const sortedLines = [...lines].sort((a, b) => {
+            const aIsAgy = a.includes('.gemini/bin/agy') ? 0 : 1;
+            const bIsAgy = b.includes('.gemini/bin/agy') ? 0 : 1;
+            return aIsAgy - bIsAgy;
+        });
+
+        for (const line of sortedLines) {
             if (line.includes('mgraftcp-fakedns')) {
                 continue; // Skip the wrapper process line
             }
-            if (line.includes('language_server_linux')) {
+
+            const isAgy = line.includes('.gemini/bin/agy') && line.includes('--hub');
+            const isLegacy = line.includes('language_server_linux');
+
+            if (isAgy || isLegacy) {
                 const parts = line.split(/\s+/);
                 if (parts.length >= 2) {
                     lsPid = parseInt(parts[1]);
-                    isPersistent = line.includes('--persistent_mode') || line.includes('persistent_mode');
+                    processType = isAgy ? 'Antigravity IDE v2.6.0+ (agy --hub)' : 'Legacy Language Server';
+                    isPersistent = isAgy || line.includes('--persistent_mode') || line.includes('persistent_mode');
+                    // Accurately report whether running process is proxied (agy.bak / language_server_linux_*.bak / mgraftcp)
+                    isProxied = line.includes('.bak') || line.includes('mgraftcp') || hasMgraftcpWrapper;
+                    break;
                 }
             }
         }
 
         // Build status message
         const modeLabel = isPersistent ? 'persistent mode' : 'normal mode';
-        const proxyLabel = hasMgraftcpWrapper ? 'using proxy' : 'NOT using proxy';
+        const proxyLabel = isProxied ? 'using proxy' : 'running directly without proxy';
         
-        if (hasMgraftcpWrapper) {
+        if (isProxied) {
             check.status = 'success';
-            check.message = `Language Server (PID ${lsPid}) is running in ${modeLabel}, ${proxyLabel}`;
+            check.message = `${processType} (PID ${lsPid}) is running in ${modeLabel}, ${proxyLabel}`;
         } else if (isPersistent) {
             // Persistent mode but not using proxy - this is the bug scenario
             check.status = 'error';
-            check.message = `Language Server (PID ${lsPid}) is running in ${modeLabel}, but ${proxyLabel}`;
-            check.suggestion = 'The LS was started before the proxy wrapper was configured. ' +
-                'Kill the LS process and reload: Run "kill ' + lsPid + '" in terminal, then reload window.';
+            check.message = `${processType} (PID ${lsPid}) is running in ${modeLabel}, but ${proxyLabel}`;
+            check.suggestion = `The process was started before the proxy wrapper was configured. ` +
+                `Kill the process: Run "kill ${lsPid}" in terminal, then reload window.`;
         } else {
             // Non-persistent mode, not using proxy
             check.status = 'warning';
-            check.message = `Language Server (PID ${lsPid}) is running in ${modeLabel}, ${proxyLabel}`;
-            check.suggestion = 'Reload the window to restart LS with proxy support.';
+            check.message = `${processType} (PID ${lsPid}) is running in ${modeLabel}, but ${proxyLabel}`;
+            check.suggestion = 'Reload the window to restart with proxy support.';
         }
 
     } catch {
         // grep returns non-zero if no match
         check.status = 'warning';
-        check.message = 'Language Server is not running';
+        check.message = 'Language Server / agy hub is not running';
         check.suggestion = 'This may be normal if you haven\'t used any AI features yet.';
     }
 
